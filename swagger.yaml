@@ -1,0 +1,1989 @@
+openapi: 3.0.3
+
+info:
+  title: Movie Booking System API
+  description: |
+    Multi-city, multi-theatre movie ticket booking platform built on Java 21 + Spring Boot 3.3.5.
+
+    ## Authentication
+    Most endpoints require a JWT Bearer token. Obtain one via `POST /api/auth/login` or `POST /api/auth/register`.
+    Pass it in the `Authorization` header as `Bearer <token>`.
+
+    ## Roles
+    | Role | Access |
+    |---|---|
+    | **CUSTOMER** | Browse, hold seats, book, cancel, view history |
+    | **ADMIN** | Full catalogue management (cities, theatres, screens, movies, shows, pricing, discounts, refund policies) |
+
+    ## Error Shape
+    All error responses follow `{ "status": <int>, "message": "<string>", "timestamp": "<ISO-8601>" }`.
+  version: 1.0.0
+  contact:
+    email: manya@adobe.com
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Auth
+    description: Registration and login
+  - name: Movies
+    description: Public movie catalogue
+  - name: Shows
+    description: Public show and seat availability
+  - name: Holds
+    description: Temporary seat holds (CUSTOMER)
+  - name: Bookings
+    description: Booking lifecycle — create, cancel, history (CUSTOMER)
+  - name: Admin — Cities
+    description: City catalogue management (ADMIN)
+  - name: Admin — Theatres
+    description: Theatre catalogue management (ADMIN)
+  - name: Admin — Screens
+    description: Screen and bulk seat management (ADMIN)
+  - name: Admin — Movies
+    description: Movie catalogue management (ADMIN)
+  - name: Admin — Shows
+    description: Show scheduling (ADMIN)
+  - name: Admin — Pricing Tiers
+    description: Pricing tier management (ADMIN)
+  - name: Admin — Discount Codes
+    description: Discount code management (ADMIN)
+  - name: Admin — Refund Policies
+    description: Refund policy management (ADMIN)
+
+security: []   # default: public; overridden per-operation
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  # ─── Enums ──────────────────────────────────────────────────────────────────
+
+  schemas:
+
+    Role:
+      type: string
+      enum: [ADMIN, CUSTOMER]
+
+    SeatType:
+      type: string
+      enum: [REGULAR, PREMIUM]
+
+    DayType:
+      type: string
+      enum: [WEEKDAY, WEEKEND]
+
+    SeatStatus:
+      type: string
+      enum: [AVAILABLE, HELD, BOOKED]
+
+    BookingStatus:
+      type: string
+      enum: [PENDING, CONFIRMED, CANCELLED, REFUNDED]
+      description: PENDING is reserved for a future async payment flow.
+
+    PaymentStatus:
+      type: string
+      enum: [PENDING, SUCCESS, FAILED]
+      description: PENDING and FAILED are reserved for a future async payment flow. Only SUCCESS is persisted currently.
+
+    PaymentMethod:
+      type: string
+      enum: [UPI, CARD, WALLET]
+
+    DiscountType:
+      type: string
+      enum: [FLAT, PERCENTAGE]
+
+    NotificationType:
+      type: string
+      enum: [BOOKING_CONFIRMED, BOOKING_CANCELLED, REFUND_PROCESSED, SHOW_REMINDER]
+
+    NotificationStatus:
+      type: string
+      enum: [PENDING, SENT, FAILED]
+
+    # ─── Request schemas ───────────────────────────────────────────────────────
+
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          example: Alice Smith
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          minLength: 6
+          example: secret123
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          example: secret123
+
+    CreateCityRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: Mumbai
+
+    CreateTheatreRequest:
+      type: object
+      required: [name, cityId]
+      properties:
+        name:
+          type: string
+          example: PVR Cinemas
+        address:
+          type: string
+          example: Phoenix Mall, Lower Parel
+        cityId:
+          type: integer
+          format: int64
+          example: 1
+
+    CreateScreenRequest:
+      type: object
+      required: [name, totalSeats, theatreId]
+      properties:
+        name:
+          type: string
+          example: Screen 1
+        totalSeats:
+          type: integer
+          minimum: 1
+          example: 150
+        theatreId:
+          type: integer
+          format: int64
+          example: 2
+
+    SeatEntry:
+      type: object
+      required: [rowNumber, seatNumber, seatType]
+      properties:
+        rowNumber:
+          type: integer
+          minimum: 1
+          example: 3
+        seatNumber:
+          type: integer
+          minimum: 1
+          example: 12
+        seatType:
+          $ref: '#/components/schemas/SeatType'
+
+    BulkCreateSeatsRequest:
+      type: object
+      required: [seats]
+      properties:
+        seats:
+          type: array
+          items:
+            $ref: '#/components/schemas/SeatEntry'
+          example:
+            - rowNumber: 1
+              seatNumber: 1
+              seatType: REGULAR
+            - rowNumber: 1
+              seatNumber: 2
+              seatType: PREMIUM
+
+    CreateMovieRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          example: Interstellar
+        description:
+          type: string
+          maxLength: 1000
+          example: A team of explorers travel through a wormhole in space.
+        duration:
+          type: integer
+          minimum: 1
+          description: Duration in minutes
+          example: 169
+        language:
+          type: string
+          example: English
+        genre:
+          type: string
+          example: Sci-Fi
+
+    CreateShowRequest:
+      type: object
+      required: [movieId, screenId, startTime, endTime]
+      properties:
+        movieId:
+          type: integer
+          format: int64
+          example: 1
+        screenId:
+          type: integer
+          format: int64
+          example: 3
+        startTime:
+          type: string
+          format: date-time
+          example: "2025-07-15T18:00:00"
+        endTime:
+          type: string
+          format: date-time
+          example: "2025-07-15T20:49:00"
+
+    CreatePricingTierRequest:
+      type: object
+      required: [seatType, dayType, basePrice]
+      properties:
+        seatType:
+          $ref: '#/components/schemas/SeatType'
+        dayType:
+          $ref: '#/components/schemas/DayType'
+        basePrice:
+          type: number
+          format: decimal
+          minimum: 0.01
+          example: 200.00
+        multiplier:
+          type: number
+          format: double
+          minimum: 0.01
+          default: 1.0
+          example: 1.5
+
+    CreateDiscountCodeRequest:
+      type: object
+      required: [code, discountType, discountValue, validFrom, validTill, maxUsage]
+      properties:
+        code:
+          type: string
+          example: SUMMER20
+        discountType:
+          $ref: '#/components/schemas/DiscountType'
+        discountValue:
+          type: number
+          format: decimal
+          minimum: 0.01
+          example: 50.00
+        validFrom:
+          type: string
+          format: date
+          example: "2025-06-01"
+        validTill:
+          type: string
+          format: date
+          example: "2025-08-31"
+        maxUsage:
+          type: integer
+          minimum: 1
+          example: 100
+
+    CreateRefundPolicyRequest:
+      type: object
+      required: [minHoursBeforeShow, refundPercentage]
+      properties:
+        minHoursBeforeShow:
+          type: integer
+          minimum: 0
+          description: Lower bound of the time band (inclusive), in hours before show start
+          example: 12
+        refundPercentage:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 100
+
+    CreateSeatHoldRequest:
+      type: object
+      required: [showId, seatIds]
+      properties:
+        showId:
+          type: integer
+          format: int64
+          example: 5
+        seatIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+          minItems: 1
+          example: [10, 11, 12]
+
+    CreateBookingRequest:
+      type: object
+      required: [holdId, paymentMethod]
+      properties:
+        holdId:
+          type: integer
+          format: int64
+          example: 7
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        discountCode:
+          type: string
+          nullable: true
+          example: SUMMER20
+
+    # ─── Response schemas ──────────────────────────────────────────────────────
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        role:
+          $ref: '#/components/schemas/Role'
+
+    CityResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        name:
+          type: string
+          example: Mumbai
+
+    TheatreResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 2
+        name:
+          type: string
+          example: PVR Cinemas
+        address:
+          type: string
+          example: Phoenix Mall, Lower Parel
+        cityId:
+          type: integer
+          format: int64
+          example: 1
+        cityName:
+          type: string
+          example: Mumbai
+
+    ScreenResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 3
+        name:
+          type: string
+          example: Screen 1
+        totalSeats:
+          type: integer
+          example: 150
+        theatreId:
+          type: integer
+          format: int64
+          example: 2
+        theatreName:
+          type: string
+          example: PVR Cinemas
+
+    ShowSeatResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 101
+        seatId:
+          type: integer
+          format: int64
+          example: 10
+        rowNumber:
+          type: integer
+          example: 3
+        seatNumber:
+          type: integer
+          example: 12
+        seatType:
+          $ref: '#/components/schemas/SeatType'
+        status:
+          $ref: '#/components/schemas/SeatStatus'
+
+    MovieResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        title:
+          type: string
+          example: Interstellar
+        description:
+          type: string
+          example: A team of explorers travel through a wormhole in space.
+        duration:
+          type: integer
+          description: Duration in minutes
+          example: 169
+        language:
+          type: string
+          example: English
+        genre:
+          type: string
+          example: Sci-Fi
+
+    ShowResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 5
+        movieId:
+          type: integer
+          format: int64
+          example: 1
+        movieTitle:
+          type: string
+          example: Interstellar
+        screenId:
+          type: integer
+          format: int64
+          example: 3
+        screenName:
+          type: string
+          example: Screen 1
+        theatreName:
+          type: string
+          example: PVR Cinemas
+        startTime:
+          type: string
+          format: date-time
+          example: "2025-07-15T18:00:00"
+        endTime:
+          type: string
+          format: date-time
+          example: "2025-07-15T20:49:00"
+
+    SeatHoldResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 7
+        showId:
+          type: integer
+          format: int64
+          example: 5
+        showSeatIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+          example: [101, 102, 103]
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-07-15T17:30:00"
+        expiresAt:
+          type: string
+          format: date-time
+          example: "2025-07-15T17:40:00"
+
+    BookingResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 20
+        showId:
+          type: integer
+          format: int64
+          example: 5
+        movieTitle:
+          type: string
+          example: Interstellar
+        bookedSeats:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShowSeatResponse'
+        totalAmount:
+          type: number
+          format: decimal
+          example: 450.00
+        bookingStatus:
+          $ref: '#/components/schemas/BookingStatus'
+        bookedAt:
+          type: string
+          format: date-time
+          example: "2025-07-15T17:32:00"
+
+    PricingTierResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        seatType:
+          $ref: '#/components/schemas/SeatType'
+        dayType:
+          $ref: '#/components/schemas/DayType'
+        basePrice:
+          type: number
+          format: decimal
+          example: 200.00
+        multiplier:
+          type: number
+          format: double
+          example: 1.5
+        effectivePrice:
+          type: number
+          format: decimal
+          description: Computed as basePrice × multiplier (scale 2, HALF_UP)
+          example: 300.00
+
+    DiscountCodeResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 3
+        code:
+          type: string
+          example: SUMMER20
+        discountType:
+          $ref: '#/components/schemas/DiscountType'
+        discountValue:
+          type: number
+          format: decimal
+          example: 50.00
+        validFrom:
+          type: string
+          format: date
+          example: "2025-06-01"
+        validTill:
+          type: string
+          format: date
+          example: "2025-08-31"
+        maxUsage:
+          type: integer
+          example: 100
+        currentUsage:
+          type: integer
+          example: 12
+
+    RefundPolicyResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        minHoursBeforeShow:
+          type: integer
+          example: 12
+        refundPercentage:
+          type: integer
+          example: 100
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 400
+        message:
+          type: string
+          example: Seat is not available for booking
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-07-15T17:30:00"
+
+    # ─── Paginated wrappers ────────────────────────────────────────────────────
+
+    PageMetadata:
+      type: object
+      properties:
+        totalElements:
+          type: integer
+          format: int64
+          example: 50
+        totalPages:
+          type: integer
+          example: 3
+        size:
+          type: integer
+          example: 20
+        number:
+          type: integer
+          description: Zero-based current page index
+          example: 0
+        first:
+          type: boolean
+          example: true
+        last:
+          type: boolean
+          example: false
+        numberOfElements:
+          type: integer
+          example: 20
+        empty:
+          type: boolean
+          example: false
+
+    PagedMovieResponse:
+      allOf:
+        - $ref: '#/components/schemas/PageMetadata'
+        - type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/MovieResponse'
+
+    PagedShowResponse:
+      allOf:
+        - $ref: '#/components/schemas/PageMetadata'
+        - type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/ShowResponse'
+
+    PagedBookingResponse:
+      allOf:
+        - $ref: '#/components/schemas/PageMetadata'
+        - type: object
+          properties:
+            content:
+              type: array
+              items:
+                $ref: '#/components/schemas/BookingResponse'
+
+  # ─── Reusable responses ──────────────────────────────────────────────────────
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 401
+            message: Unauthorized
+            timestamp: "2025-07-15T17:30:00"
+
+    Forbidden:
+      description: Authenticated but role not permitted
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 403
+            message: Access denied
+            timestamp: "2025-07-15T17:30:00"
+
+    NotFound:
+      description: Requested resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 404
+            message: Resource not found
+            timestamp: "2025-07-15T17:30:00"
+
+    Conflict:
+      description: Optimistic lock conflict — seat was modified concurrently; retry the request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 409
+            message: Seat was modified by another transaction; please retry
+            timestamp: "2025-07-15T17:30:00"
+
+  # ─── Reusable parameters ─────────────────────────────────────────────────────
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: Zero-based page index (default 0)
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+    SizeParam:
+      name: size
+      in: query
+      description: Page size (default 20)
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Paths
+# ═══════════════════════════════════════════════════════════════════════════════
+
+paths:
+
+  # ─── Auth ──────────────────────────────────────────────────────────────────
+
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          description: Registration successful — returns JWT token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Validation error or email already in use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and receive a JWT token
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful — returns JWT token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Bad credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ─── Movies (public) ───────────────────────────────────────────────────────
+
+  /api/movies:
+    get:
+      tags: [Movies]
+      summary: List all movies (paginated)
+      operationId: getAllMovies
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Paginated list of movies
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedMovieResponse'
+
+  /api/movies/{id}:
+    get:
+      tags: [Movies]
+      summary: Get a movie by ID
+      operationId: getMovieById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Movie detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovieResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Shows (public) ────────────────────────────────────────────────────────
+
+  /api/cities/{cityId}/shows:
+    get:
+      tags: [Shows]
+      summary: List all shows in a city (paginated)
+      operationId: getShowsByCity
+      parameters:
+        - name: cityId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Paginated list of shows in the city
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedShowResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/shows/{id}:
+    get:
+      tags: [Shows]
+      summary: Get show detail by ID
+      operationId: getShowById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Show detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/shows/{id}/seats:
+    get:
+      tags: [Shows]
+      summary: Get seat availability for a show
+      operationId: getShowSeats
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: List of show seats with current availability status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShowSeatResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Seat Holds (CUSTOMER) ─────────────────────────────────────────────────
+
+  /api/holds:
+    post:
+      tags: [Holds]
+      summary: Hold one or more seats for a show
+      description: |
+        Temporarily reserves the requested seats for the authenticated customer.
+        The hold expires after the configured hold duration (default 10 minutes).
+        All seats must be AVAILABLE; if any seat is HELD or BOOKED the request is rejected.
+        Returns HTTP 409 if an optimistic lock conflict is detected (concurrent selection of the same seat).
+      operationId: createHold
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSeatHoldRequest'
+      responses:
+        '200':
+          description: Hold created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeatHoldResponse'
+        '400':
+          description: One or more seats are not available or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ─── Bookings (CUSTOMER) ───────────────────────────────────────────────────
+
+  /api/bookings:
+    post:
+      tags: [Bookings]
+      summary: Confirm a seat hold into a booking
+      description: |
+        Converts an active hold into a confirmed booking by processing payment.
+
+        **Happy path:** validates hold ownership and expiry → calculates price per seat from
+        PricingTier (SeatType × DayType) → applies optional discount → processes payment via
+        the selected gateway → marks seats BOOKED → creates Booking (CONFIRMED) + Payment (SUCCESS)
+        → fires async `BookingConfirmedEvent`.
+
+        **Payment failure:** resets all held seats to AVAILABLE and expires the hold immediately;
+        does not create a Booking record. Returns HTTP 400.
+      operationId: createBooking
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBookingRequest'
+      responses:
+        '200':
+          description: Booking confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingResponse'
+        '400':
+          description: |
+            One of:
+            - Hold has expired
+            - Hold does not belong to the authenticated customer
+            - Payment gateway returned failure
+            - Discount code invalid, expired, or over usage limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Hold not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bookings/{id}/cancel:
+    patch:
+      tags: [Bookings]
+      summary: Cancel a confirmed booking
+      description: |
+        Cancels a CONFIRMED booking. Refund amount is determined by the closest matching
+        RefundPolicy time band (`minHoursBeforeShow`).
+
+        - `refundAmount > 0` → `bookingStatus = REFUNDED`; fires `BookingCancelledEvent` + `RefundProcessedEvent`
+        - `refundAmount = 0` → `bookingStatus = CANCELLED`; fires `BookingCancelledEvent` only
+
+        Cancelled seats are immediately returned to AVAILABLE status.
+      operationId: cancelBooking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Booking cancelled (or refunded)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingResponse'
+        '400':
+          description: |
+            One of:
+            - Booking does not belong to the authenticated customer
+            - Booking is not in CONFIRMED status
+            - Show has already started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/bookings/history:
+    get:
+      tags: [Bookings]
+      summary: Get booking history for the authenticated customer (paginated)
+      operationId: getBookingHistory
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: Paginated booking history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedBookingResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─── Admin — Cities ────────────────────────────────────────────────────────
+
+  /api/admin/cities:
+    post:
+      tags: [Admin — Cities]
+      summary: Create a city
+      operationId: createCity
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCityRequest'
+      responses:
+        '200':
+          description: City created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CityResponse'
+        '400':
+          description: Validation error or city name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Admin — Cities]
+      summary: List all cities
+      operationId: getAllCities
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of all cities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CityResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/cities/{id}:
+    put:
+      tags: [Admin — Cities]
+      summary: Update a city
+      operationId: updateCity
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCityRequest'
+      responses:
+        '200':
+          description: City updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CityResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Cities]
+      summary: Delete a city (cascades to theatres → screens → seats)
+      operationId: deleteCity
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: City deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Admin — Theatres ──────────────────────────────────────────────────────
+
+  /api/admin/theatres:
+    post:
+      tags: [Admin — Theatres]
+      summary: Create a theatre
+      operationId: createTheatre
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTheatreRequest'
+      responses:
+        '200':
+          description: Theatre created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TheatreResponse'
+        '400':
+          description: Validation error or city not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Admin — Theatres]
+      summary: List all theatres
+      operationId: getAllTheatres
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of all theatres
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TheatreResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/theatres/{id}:
+    put:
+      tags: [Admin — Theatres]
+      summary: Update a theatre
+      operationId: updateTheatre
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTheatreRequest'
+      responses:
+        '200':
+          description: Theatre updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TheatreResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Theatres]
+      summary: Delete a theatre (cascades to screens → seats)
+      operationId: deleteTheatre
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Theatre deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Admin — Screens ───────────────────────────────────────────────────────
+
+  /api/admin/screens:
+    post:
+      tags: [Admin — Screens]
+      summary: Create a screen
+      operationId: createScreen
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScreenRequest'
+      responses:
+        '200':
+          description: Screen created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenResponse'
+        '400':
+          description: Validation error or theatre not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Admin — Screens]
+      summary: List all screens
+      operationId: getAllScreens
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of all screens
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ScreenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/screens/{id}:
+    put:
+      tags: [Admin — Screens]
+      summary: Update a screen
+      operationId: updateScreen
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScreenRequest'
+      responses:
+        '200':
+          description: Screen updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Screens]
+      summary: Delete a screen (cascades to seats)
+      operationId: deleteScreen
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Screen deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/screens/{id}/seats:
+    post:
+      tags: [Admin — Screens]
+      summary: Bulk-create seats for a screen
+      description: |
+        Creates multiple physical seat records for an existing screen.
+        Each seat specifies its row, seat number, and type (REGULAR or PREMIUM).
+        ShowSeat availability rows are created automatically when a Show is scheduled on this screen.
+      operationId: createSeats
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Screen ID
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkCreateSeatsRequest'
+      responses:
+        '200':
+          description: Seats created; returns the resulting ShowSeat availability records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShowSeatResponse'
+        '400':
+          description: Validation error or screen not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Admin — Movies ────────────────────────────────────────────────────────
+
+  /api/admin/movies:
+    post:
+      tags: [Admin — Movies]
+      summary: Create a movie
+      operationId: createMovie
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMovieRequest'
+      responses:
+        '200':
+          description: Movie created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovieResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/movies/{id}:
+    put:
+      tags: [Admin — Movies]
+      summary: Update a movie
+      operationId: updateMovie
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMovieRequest'
+      responses:
+        '200':
+          description: Movie updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovieResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Movies]
+      summary: Delete a movie
+      operationId: deleteMovie
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Movie deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Admin — Shows ─────────────────────────────────────────────────────────
+
+  /api/admin/shows:
+    post:
+      tags: [Admin — Shows]
+      summary: Schedule a show
+      description: |
+        Creates a show for a given movie on a given screen.
+        Guard: the screen must not have another show overlapping the requested time window
+        (`startTime`–`endTime`). Overlapping shows on the same screen are rejected with HTTP 400.
+      operationId: createShow
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateShowRequest'
+      responses:
+        '200':
+          description: Show scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowResponse'
+        '400':
+          description: Validation error or overlapping show on the same screen
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Movie or screen not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/admin/shows/{id}:
+    put:
+      tags: [Admin — Shows]
+      summary: Update a show
+      operationId: updateShow
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateShowRequest'
+      responses:
+        '200':
+          description: Show updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Shows]
+      summary: Delete a show
+      operationId: deleteShow
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Show deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Admin — Pricing Tiers ─────────────────────────────────────────────────
+
+  /api/admin/pricing-tiers:
+    post:
+      tags: [Admin — Pricing Tiers]
+      summary: Create a pricing tier
+      description: |
+        A pricing tier maps a SeatType × DayType combination to a base price and multiplier.
+        Effective price = `basePrice × multiplier` (scale 2, HALF_UP).
+        The four standard tiers are REGULAR_WEEKDAY, REGULAR_WEEKEND, PREMIUM_WEEKDAY, PREMIUM_WEEKEND.
+      operationId: createPricingTier
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePricingTierRequest'
+      responses:
+        '200':
+          description: Pricing tier created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingTierResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Admin — Pricing Tiers]
+      summary: List all pricing tiers
+      operationId: getAllPricingTiers
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of all pricing tiers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PricingTierResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/pricing-tiers/{id}:
+    put:
+      tags: [Admin — Pricing Tiers]
+      summary: Update a pricing tier
+      operationId: updatePricingTier
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePricingTierRequest'
+      responses:
+        '200':
+          description: Pricing tier updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingTierResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Pricing Tiers]
+      summary: Delete a pricing tier
+      operationId: deletePricingTier
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Pricing tier deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Admin — Discount Codes ────────────────────────────────────────────────
+
+  /api/admin/discount-codes:
+    post:
+      tags: [Admin — Discount Codes]
+      summary: Create a discount code
+      description: |
+        - **FLAT** discount: subtracts a fixed amount; result floored at zero.
+        - **PERCENTAGE** discount: `totalAmount × discountValue / 100`, scale 2, HALF_UP.
+        - At most one discount code may be applied per booking.
+      operationId: createDiscountCode
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDiscountCodeRequest'
+      responses:
+        '200':
+          description: Discount code created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscountCodeResponse'
+        '400':
+          description: Validation error or code already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Admin — Discount Codes]
+      summary: List all discount codes
+      operationId: getAllDiscountCodes
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of all discount codes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DiscountCodeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/discount-codes/{id}:
+    put:
+      tags: [Admin — Discount Codes]
+      summary: Update a discount code
+      operationId: updateDiscountCode
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDiscountCodeRequest'
+      responses:
+        '200':
+          description: Discount code updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscountCodeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Discount Codes]
+      summary: Delete a discount code
+      operationId: deleteDiscountCode
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Discount code deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Admin — Refund Policies ───────────────────────────────────────────────
+
+  /api/admin/refund-policies:
+    post:
+      tags: [Admin — Refund Policies]
+      summary: Create a refund policy time band
+      description: |
+        Defines a time-band refund rule. When a booking is cancelled, the system selects the
+        policy whose `minHoursBeforeShow` is the closest match (largest value that is ≤ hours
+        remaining before show start).
+
+        Example configuration:
+        | minHoursBeforeShow | refundPercentage |
+        |---|---|
+        | 12 | 100 |
+        | 4  | 50  |
+        | 1  | 25  |
+        | 0  | 0   |
+      operationId: createRefundPolicy
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRefundPolicyRequest'
+      responses:
+        '200':
+          description: Refund policy created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundPolicyResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Admin — Refund Policies]
+      summary: List all refund policies
+      operationId: getAllRefundPolicies
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of all refund policy time bands
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RefundPolicyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/refund-policies/{id}:
+    put:
+      tags: [Admin — Refund Policies]
+      summary: Update a refund policy
+      operationId: updateRefundPolicy
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRefundPolicyRequest'
+      responses:
+        '200':
+          description: Refund policy updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundPolicyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Admin — Refund Policies]
+      summary: Delete a refund policy time band
+      operationId: deleteRefundPolicy
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Refund policy deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'

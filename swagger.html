@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Movie Booking System — API Docs</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f6f9;
+    }
+
+    /* ── Top nav bar ─────────────────────────────────────────────────────── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 28px;
+      height: 56px;
+      background: linear-gradient(135deg, #1a1f36 0%, #2d3561 100%);
+      box-shadow: 0 2px 8px rgba(0,0,0,.35);
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+    }
+
+    .topbar-icon {
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .topbar-title {
+      color: #ffffff;
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: .3px;
+      flex: 1;
+    }
+
+    .topbar-badge {
+      background: #4caf50;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 12px;
+      letter-spacing: .5px;
+    }
+
+    /* ── Swagger UI wrapper ───────────────────────────────────────────────── */
+    #swagger-ui {
+      max-width: 1200px;
+      margin: 28px auto 60px;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 1px 6px rgba(0,0,0,.10), 0 4px 20px rgba(0,0,0,.06);
+      overflow: hidden;
+    }
+
+    /* ── Override Swagger's own top bar (hide it) ─────────────────────────── */
+    .swagger-ui .topbar { display: none !important; }
+
+    /* ── Info block ───────────────────────────────────────────────────────── */
+    .swagger-ui .info {
+      margin: 30px 28px 20px !important;
+    }
+    .swagger-ui .info .title {
+      font-size: 28px !important;
+      color: #1a1f36 !important;
+    }
+    .swagger-ui .info .description p {
+      color: #444 !important;
+      line-height: 1.6 !important;
+    }
+
+    /* ── Operation blocks ─────────────────────────────────────────────────── */
+    .swagger-ui .opblock {
+      border-radius: 6px !important;
+      margin-bottom: 8px !important;
+      border: 1px solid rgba(0,0,0,.08) !important;
+      box-shadow: none !important;
+    }
+    .swagger-ui .opblock .opblock-summary {
+      border-radius: 6px !important;
+    }
+
+    /* HTTP method colour palette */
+    .swagger-ui .opblock.opblock-get    { background: rgba(97,175,254,.08) !important; border-color: #61affe !important; }
+    .swagger-ui .opblock.opblock-post   { background: rgba(73,204,144,.08) !important; border-color: #49cc90 !important; }
+    .swagger-ui .opblock.opblock-put    { background: rgba(252,161,48,.08)  !important; border-color: #fca130 !important; }
+    .swagger-ui .opblock.opblock-patch  { background: rgba(80,227,194,.08)  !important; border-color: #50e3c2 !important; }
+    .swagger-ui .opblock.opblock-delete { background: rgba(249,62,62,.08)   !important; border-color: #f93e3e !important; }
+
+    .swagger-ui .opblock-tag {
+      font-size: 16px !important;
+      font-weight: 600 !important;
+      color: #1a1f36 !important;
+      border-bottom: 2px solid #e8eaf0 !important;
+      margin-bottom: 12px !important;
+    }
+
+    /* ── Schema / model section ───────────────────────────────────────────── */
+    .swagger-ui section.models {
+      border-top: 2px solid #e8eaf0 !important;
+      margin-top: 32px !important;
+      padding: 0 20px 20px !important;
+    }
+    .swagger-ui section.models h4 {
+      color: #1a1f36 !important;
+      font-size: 16px !important;
+    }
+
+    /* ── Authorize button ─────────────────────────────────────────────────── */
+    .swagger-ui .btn.authorize {
+      background: #1a1f36 !important;
+      color: #fff !important;
+      border-color: #1a1f36 !important;
+      border-radius: 6px !important;
+      font-weight: 600 !important;
+    }
+    .swagger-ui .btn.authorize:hover {
+      background: #2d3561 !important;
+    }
+
+    /* ── Execute button ───────────────────────────────────────────────────── */
+    .swagger-ui .btn.execute {
+      background: #2d3561 !important;
+      border-color: #2d3561 !important;
+      border-radius: 6px !important;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top navigation bar -->
+  <div class="topbar">
+    <span class="topbar-icon">🎬</span>
+    <span class="topbar-title">Movie Booking System — API Reference</span>
+    <span class="topbar-badge">v1.0.0</span>
+  </div>
+
+  <!-- Swagger UI mount point -->
+  <div id="swagger-ui"></div>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = function () {
+      SwaggerUIBundle({
+        url: "./swagger.yaml",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIStandalonePreset
+        ],
+        plugins: [
+          SwaggerUIBundle.plugins.DownloadUrl
+        ],
+        layout: "StandaloneLayout",
+        defaultModelsExpandDepth: 1,
+        defaultModelExpandDepth: 2,
+        docExpansion: "list",
+        filter: true,
+        tryItOutEnabled: true,
+        requestInterceptor: function (request) {
+          return request;
+        }
+      });
+    };
+  </script>
+</body>
+</html>
