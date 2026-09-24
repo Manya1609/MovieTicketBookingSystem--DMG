@@ -21,6 +21,7 @@
 
 # Maven
 target/
+.m2repo/
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup
